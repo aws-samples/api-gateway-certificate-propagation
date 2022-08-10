@@ -1,0 +1,421 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: 'AWS::Serverless-2016-10-31'
+
+Parameters:
+  Prefix:
+    Type: String
+    Default: apigw-cert-demo
+  CustomDomain:
+    Type: String
+  HostedZoneId: 
+    Type: String
+  ApiGatewayStageName:
+    Type: String
+    Default: stage1
+
+Resources:
+# Let's start by setting up a VPC where the simulated backend application will live
+  BackendApplicationVpc:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: 10.0.0.0/16
+      EnableDnsSupport: true
+      EnableDnsHostnames: true
+      Tags:
+        - Key: Name
+          Value: !Sub "${Prefix}-vpc"
+
+  InternetGateway:
+    Type: AWS::EC2::InternetGateway
+    DependsOn: BackendApplicationVpc
+    Properties:
+      Tags:
+        - Key: Name
+          Value: !Sub "${Prefix}-igw"
+
+  VPCGatewayAttachment:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      InternetGatewayId: !Ref InternetGateway
+      VpcId: !Ref BackendApplicationVpc
+
+# Let's create two subnets - a public and a private one. 
+
+# Public Subnet will host the NAT gateway so that backend application can 
+# communicate externally and install updates
+  PublicSubnet:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref BackendApplicationVpc
+      CidrBlock: 10.0.0.0/24
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: !Sub ${Prefix}-public-subnet
+
+  PublicSubnetRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref BackendApplicationVpc
+      Tags:
+        - Key: Name
+          Value: !Sub ${Prefix}-public-subnet-route-table
+
+  PublicSubnetRouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref PublicSubnetRouteTable
+      SubnetId: !Ref PublicSubnet
+
+  PublicSubnetRoute1:
+    Type: AWS::EC2::Route
+    DependsOn: InternetGateway
+    Properties:
+      RouteTableId: !Ref PublicSubnetRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref InternetGateway
+
+  ElasticIP:
+    Type: AWS::EC2::EIP
+    Properties:
+      Domain: vpc
+      Tags:
+        - Key: Name
+          Value: !Sub ${Prefix}-eip
+
+  NatGateway:
+    Type: AWS::EC2::NatGateway
+    Properties:
+      AllocationId: !GetAtt ElasticIP.AllocationId
+      SubnetId: !Ref PublicSubnet
+      Tags:
+        - Key: Name
+          Value: !Sub ${Prefix}-natgw      
+
+# Private Subnet will host the backend application instance
+  PrivateSubnet:
+    Type: AWS::EC2::Subnet
+    DependsOn: NatGateway
+    Properties:
+      VpcId: !Ref BackendApplicationVpc
+      CidrBlock: 10.0.1.0/24
+      MapPublicIpOnLaunch: false
+      Tags:
+        - Key: Name
+          Value: !Sub ${Prefix}-private-subnet
+
+  PrivateSubnetRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref BackendApplicationVpc
+      Tags:
+        - Key: Name
+          Value: !Sub ${Prefix}-private-subnet-route-table
+
+  PrivateSubnetRouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref PrivateSubnetRouteTable
+      SubnetId: !Ref PrivateSubnet
+
+  PrivateSubnetRoute1:
+    Type: AWS::EC2::Route
+    Properties:
+      RouteTableId: !Ref PrivateSubnetRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      NatGatewayId: !Ref NatGateway
+
+# The backend application instance is provisioned in a private subnet, so it cannot 
+# be accessed directly from the public internet.
+  Ec2KeyPair:
+    Type: AWS::EC2::KeyPair
+    Properties: 
+      KeyName: !Sub ${Prefix}-key
+      Tags:
+        - Key: Name
+          Value: !Sub ${Prefix}-key
+  
+  VpcSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupName: !Sub ${Prefix}-security-group
+      GroupDescription: !Sub ${Prefix}-security-group
+      VpcId: !Ref BackendApplicationVpc
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 0
+          ToPort: 65535
+          CidrIp: 0.0.0.0/0
+      SecurityGroupEgress:
+        - IpProtocol: tcp
+          FromPort: 0
+          ToPort: 65535
+          CidrIp: 0.0.0.0/0
+      Tags:
+        - Key: Name
+          Value: !Sub ${Prefix}-security-group
+
+  BackendApplicationHost:
+    Type: AWS::EC2::Instance
+    DependsOn: [NatGateway, InternetGateway]
+    Properties: 
+      InstanceType: t2.micro
+      ImageId: ami-0cff7528ff583bf9a
+      SubnetId: !Ref PrivateSubnet
+      SecurityGroupIds:
+        - !Ref VpcSecurityGroup
+      KeyName: !Ref Ec2KeyPair
+      UserData: !Base64 |
+        Content-Type: multipart/mixed; boundary="//"
+        MIME-Version: 1.0
+
+        --//
+        Content-Type: text/cloud-config; charset="us-ascii"
+        MIME-Version: 1.0
+        Content-Transfer-Encoding: 7bit
+        Content-Disposition: attachment; filename="cloud-config.txt"
+
+        #cloud-config
+        cloud_final_modules:
+        - [scripts-user, always]
+
+        --//
+        Content-Type: text/x-shellscript; charset="us-ascii"
+        MIME-Version: 1.0
+        Content-Transfer-Encoding: 7bit
+        Content-Disposition: attachment; filename="userdata.txt"
+
+        #!/bin/bash -xe
+        yum update -y
+        yum install curl -y
+        curl -sL https://rpm.nodesource.com/setup_16.x | sudo bash -
+        yum install nodejs -y
+        mkdir -p /home/ec2-user/app 
+        cd /home/ec2-user/app 
+        npm install express
+        touch index.js
+        echo "const express=require('express');" > index.js
+        echo "const app=express();" >> index.js
+        echo "app.use('/',(req, res)=>{" >> index.js
+        echo "  res.send({" >> index.js
+        echo "    message: 'Hello from sayhello backend app!'," >> index.js
+        echo "    requestHeaders: req.headers" >> index.js
+        echo "  });" >> index.js
+        echo "});" >> index.js
+        echo "app.listen(3000); " >> index.js
+        node index.js &
+        --//--
+      Tags:
+        - Key: Name
+          Value: !Sub ${Prefix}-backendapp
+
+# The only thing left to do on the backend side is to add a Network Load 
+# Balancer which we'll connect to from the API Gateway.
+  NlbTargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties: 
+      Name: !Sub ${Prefix}-target-group1
+      HealthCheckIntervalSeconds: 10
+      HealthyThresholdCount: 2
+      UnhealthyThresholdCount: 2
+      Port: 3000
+      Protocol: TCP
+      Targets: 
+        - Id: !Ref BackendApplicationHost
+      VpcId: !Ref BackendApplicationVpc
+
+  NetworkLoadBalancer:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties:
+      Type: network
+      Name: !Sub ${Prefix}-nlb
+      Scheme: internal
+      Subnets:
+        - !Ref PrivateSubnet
+
+  NlbListener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      LoadBalancerArn: !Ref NetworkLoadBalancer
+      Port: 3000
+      Protocol: TCP
+      DefaultActions:
+        - Type: forward
+          ForwardConfig:
+            TargetGroups:
+              - TargetGroupArn: !Ref NlbTargetGroup
+
+# The backend part is done! Let's start building the frontend. 
+
+# We'll start by creating a S3 bucket and uploading the client certificate 
+# trust store using a custom Lambda resource
+  TruststoreBucket:
+    Type: AWS::S3::Bucket
+
+  UploadTruststoreFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: ./src/upload-truststore/
+      Handler: index.handler
+      Runtime: nodejs16.x
+      Policies:
+        - AWSLambdaBasicExecutionRole
+        - S3CrudPolicy:
+            BucketName: !Ref TruststoreBucket
+  
+  UploadTruststoreCustomResource:
+    Type: Custom::UploadTruststore
+    Properties:
+      ServiceToken: !GetAtt UploadTruststoreFunction.Arn
+      BucketName: !Ref TruststoreBucket
+      ObjectKey: truststore.pem
+
+# Now let's setup the server certfificate that will be used for custom domain.
+# Let's create this certificate in Certificate Manager
+  RestApiCertificate:
+    Type: AWS::CertificateManager::Certificate
+    Properties:
+      DomainName: !Ref CustomDomain
+      ValidationMethod: DNS
+      DomainValidationOptions: 
+        - DomainName: !Ref CustomDomain
+          HostedZoneId: !Ref HostedZoneId      
+
+# Let's create a VPC Link, that will be used by API Gateway to connect to the
+# Network Load Balancer we created previously
+  VpcLink:
+    Type: AWS::ApiGateway::VpcLink
+    DependsOn: NetworkLoadBalancer
+    Properties: 
+      Name: !Sub '${Prefix}-vpclink'
+      TargetArns: 
+        - !Ref NetworkLoadBalancer
+
+# Let's create an API Gateway, a custom domain, and register that custom domain
+# with a public hosted zone in Route53
+  RestApi:
+    Type: AWS::ApiGateway::RestApi
+    DependsOn: VpcLink
+    Properties:
+      Name: !Sub '${Prefix}-restapi'
+      Description: API Gateway Certificate Propagation Demo
+      DisableExecuteApiEndpoint: true
+      EndpointConfiguration:
+        Types:
+          - REGIONAL
+  
+  RestApiDomainName:
+    Type: AWS::ApiGateway::DomainName
+    DependsOn: UploadTruststoreCustomResource
+    Properties:
+      RegionalCertificateArn: !Ref RestApiCertificate
+      DomainName: !Ref CustomDomain
+      SecurityPolicy: TLS_1_2
+      MutualTlsAuthentication:
+        TruststoreUri: !Sub 's3://${TruststoreBucket}/truststore.pem'
+      EndpointConfiguration:
+        Types:
+          - REGIONAL
+      
+  Route53Record:
+    Type: AWS::Route53::RecordSet
+    Properties: 
+      Name: !Ref RestApiDomainName
+      Type: A
+      HostedZoneId: !Ref HostedZoneId
+      AliasTarget: 
+        DNSName: !GetAtt RestApiDomainName.RegionalDomainName
+        HostedZoneId: !GetAtt RestApiDomainName.RegionalHostedZoneId
+
+# Let's create a custom Lambda Authorizer. It will extract Subject information from the 
+# client certificate, and return it to API Gateway to be forwarded to the downstream
+# application backend
+  CustomAuthorizerFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: ./src/authorizer/
+      Runtime: nodejs16.x
+      Handler: index.handler
+      Timeout: 5
+      Policies:
+        - AWSLambdaBasicExecutionRole
+  
+  CustomAuthorizerFunctionCallerRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: "Allow"
+            Action: "sts:AssumeRole"
+            Principal: 
+              Service: "apigateway.amazonaws.com"
+      Policies:
+        - PolicyName: !Sub '${Prefix}-apigw-authorizer-policy'
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: "Allow"
+                Action: "lambda:InvokeFunction"
+                Resource: !GetAtt CustomAuthorizerFunction.Arn
+
+  CustomAuthorizer: 
+    Type: AWS::ApiGateway::Authorizer
+    Properties: 
+      Name: !Sub ${Prefix}-authorizer
+      AuthorizerCredentials: !GetAtt CustomAuthorizerFunctionCallerRole.Arn
+      RestApiId: !Ref RestApi
+      AuthorizerResultTtlInSeconds: 0
+      Type: REQUEST
+      AuthorizerUri: !Sub 'arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${CustomAuthorizerFunction.Arn}/invocations'
+
+# Almost done! Let's create the sayhello resource. It will use the above VPC Link as integration
+# Note the Integration.RequestParameters block. This is where the magic happens. clientCertSub
+# returned from the Authorizer is getting injected into integration request. 
+  SayHelloResource:
+    Type: AWS::ApiGateway::Resource
+    Properties:
+      ParentId: !GetAtt RestApi.RootResourceId
+      PathPart: sayhello
+      RestApiId: !Ref RestApi
+
+  SayHelloGetMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      AuthorizationType: CUSTOM
+      AuthorizerId: !Ref CustomAuthorizer
+      HttpMethod: GET
+      ResourceId: !Ref SayHelloResource
+      RestApiId: !Ref RestApi
+      Integration:
+        Type: HTTP_PROXY
+        ConnectionType: VPC_LINK
+        ConnectionId: !Ref VpcLink
+        IntegrationHttpMethod: GET
+        Uri: !Sub 'http://${NetworkLoadBalancer.DNSName}:3000/'
+        RequestParameters:
+          'integration.request.header.X-Client-Cert-Sub': 'context.authorizer.clientCertSub'
+
+# And finally let's deploy our API and map it to the custom domain
+  RestApiDeployment:
+    Type: AWS::ApiGateway::Deployment
+    DependsOn: SayHelloGetMethod
+    Properties:
+      RestApiId: !Ref RestApi
+      StageName: !Ref ApiGatewayStageName
+
+  RestApiBasePathMapping:
+    Type: AWS::ApiGateway::BasePathMapping
+    DependsOn: [RestApiDeployment, RestApiDomainName]
+    Properties: 
+      DomainName: !Ref CustomDomain
+      RestApiId: !Ref RestApi
+      Stage: !Ref ApiGatewayStageName
+
+Outputs:
+  TruststoreBucketName: 
+    Value: !Ref TruststoreBucket
+  NlbDnsName: 
+    Value: !GetAtt NetworkLoadBalancer.DNSName
+  RestApiEndpoint:
+    Value: !Sub 'https://${RestApiDomainName}/sayhello'
