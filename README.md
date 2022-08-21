@@ -22,13 +22,50 @@ endpoint.
 7. The backend application receives the request, extracts the injected
 subject, and uses it with custom business logic.
 
+To simulate a VPC environment two subnets will be created - a private and a public one. The backend application running on an EC2 instance will be hosted in a private subnet, so it cannot be reached directly from the public network such as the internet. A public subnet will be created to host the NAT Gateway, so the backend application running in the private subnet can reach out to internet to download updates. 
+
+## Key areas in sample code
+
+There are two key areas in the sample code that you should pay attention to. 
+
+1. See `src/authorizer/index.js`. The Lambda authorizer code extracts the subject from the client certificate, and returns the value as part of the `context` object back to API Gateway. This allows API Gateway to use this value is the subsequent integration request. 
+
+    ![](key-area-1.png)
+
+2. See `template.yaml`. The client certificate subject extracted by Lambda authorizer is injected into the integration request as `X-Client-Cert-Sub` HTTP header.
+
+    ![](key-area-2.png)
 
 ## Prerequisites
+
+* Use `us-east-1` region. 
 * An AWS account. To sign up follow instructions at [Sign Up For AWS](https://aws.amazon.com/resources/create-account/).
-* Existing public hosted zone in Amazon Route53, required for setting up custom domain
 * [AWS CLI](https://docs.aws.amazon.com/cli/latest/userguide/getting-started-install.html) and [AWS SAM CLI installed](https://docs.aws.amazon.com/serverless-application-model/latest/developerguide/serverless-sam-cli-install.html)
+* Existing public hosted zone in Amazon Route53, required for setting up custom domain. See below for details.
+
+Enabling mTLS on API Gateway requires using custom domains. This sample assumes you already have a public hosted zone registered in Amazon Route53.
+
+![](route53.png)
+
+During sample deployment you will be asked to provide values for `CustomDomain` and `HostedZoneId` parameters. `CustomDomain` can be any custom subdomain of the root domain name you have registered in Route53, e.g. if you have `example.com` registered as a public domain name in Route 53, you can use `apigw-cert-propagation-demo.example.com`. `HostedZoneId` is the Hosted zone ID of your root domain can be taken from Route 53 console, see above screenshot.
+
+If you do not have a public hosted zone with domain name registered in Route 53, you will need to create one first. Refer to [Route 53 documentation](https://docs.aws.amazon.com/Route53/latest/DeveloperGuide/Welcome.html) for required steps. 
+
+In addition, you can also change below parameter values in the `template.yaml` file.
+
+| Name                   | Type   | Default value         |
+| ---------------------- | ------ | --------------------- |
+| ApiGatewayStageName    | String | stage1                |
+| VpcCidrBlock           | String | 10.0.0.0/16           |
+| PublicSubnetCidrBlock  | String | 10.0.0.0/24           |
+| PrivateSubnetCidrBlock | String | 10.0.1.0/24           |
+| Ec2InstaceAmi          | String | ami-0cff7528ff583bf9a |
 
 ## How to run
+
+> ![](https://img.shields.io/badge/_-IMPORTANT-red) <br/> 
+> Some of the resources created as part of this sample architecture will have associated costs both when in use and running idle. This includes resources like NAT Gateway, Network Load Balancer, EC2 instance. Once you're done exploring the solution it is recommended to delete the deployed Stack to avoid unexpected costs. See the [Cleaning Up](#cleaning-up) section below for details. 
+
 1.	Clone the repository. Change directory to `api-gateway-certificate-propagation`
 
     ```bash
@@ -54,15 +91,13 @@ subject, and uses it with custom business logic.
     sam deploy --guided
     ```
  
-    > Note: Enabling mTLS on API Gateway requires using custom domains. Before deployment starts you will be asked to provide values for `CustomDomain` and `HostedZoneId` parameters. `CustomDomain` can be any custom subdomain of the root domain you have registered in Route53, e.g., `apigw-cert-propagation-demo.example.com`. `HostedZoneId` must point to the public hosted zone. 
-
 5. Multiple resources are provisioned for you as part of the deployment, it will take several minutes to complete. Following successful deployment, refer to the RestApiEndpoint variable in the Output section to locate the API Gateway endpoint. Make a note of it. You will need it for testing.
- 
+
 6.	You can explore the project content while deployment runs
 
     * `template.yaml` contains the SAM/CloudFormation template for project resources. Each step in the template has comments explaining what is being done. 
     * `generate-certificates.sh` holds openssl commands used to generate private certificate CA, and client certificate. 
-    * `/src/upload-truststore` is a simple Lambda function used as custom resource to automatically upload the generated truststore.pem with client certificate to S3 during sam deploy. The trustore file in S3 is a requirement to enable mTLS on API Gateway Custom Domain. 
+    * `/src/upload-truststore` is a simple Lambda function used as a custom resource to automatically upload the generated truststore.pem with client certificate to S3 during sam deploy. The trustore file in S3 is a requirement to enable mTLS on API Gateway Custom Domain. 
     * `/src/authorizer` is the Lambda authorizer function used by API Gateway. It extracts the certificate information, and returns required properties back to API Gateway for further propagation to downstream applications. 
 
 ## How to test
@@ -94,7 +129,7 @@ API Gateway validated the mTLS client certificate, used the Lambda authorizer to
 
 ## Cleaning Up
 
-Use `sam delete` command in the `api-gateway-certificate-propagation` directory to delete resources associated with this sample. 
+Use the `sam delete` command in the `api-gateway-certificate-propagation` directory to delete resources associated with this sample. 
 
 
 ## Additional resources

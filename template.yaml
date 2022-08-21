@@ -12,13 +12,25 @@ Parameters:
   ApiGatewayStageName:
     Type: String
     Default: stage1
+  VpcCidrBlock:
+    Type: String
+    Default: 10.0.0.0/16
+  PublicSubnetCidrBlock:
+    Type: String
+    Default: 10.0.0.0/24
+  PrivateSubnetCidrBlock:
+    Type: String
+    Default: 10.0.1.0/24
+  Ec2InstaceAmi:
+    Type: String
+    Default: ami-0cff7528ff583bf9a
 
 Resources:
 # Let's start by setting up a VPC where the simulated backend application will live
   BackendApplicationVpc:
     Type: AWS::EC2::VPC
     Properties:
-      CidrBlock: 10.0.0.0/16
+      CidrBlock: !Ref VpcCidrBlock
       EnableDnsSupport: true
       EnableDnsHostnames: true
       Tags:
@@ -47,7 +59,7 @@ Resources:
     Type: AWS::EC2::Subnet
     Properties:
       VpcId: !Ref BackendApplicationVpc
-      CidrBlock: 10.0.0.0/24
+      CidrBlock: !Ref PublicSubnetCidrBlock
       MapPublicIpOnLaunch: true
       Tags:
         - Key: Name
@@ -98,7 +110,7 @@ Resources:
     DependsOn: NatGateway
     Properties:
       VpcId: !Ref BackendApplicationVpc
-      CidrBlock: 10.0.1.0/24
+      CidrBlock: !Ref PrivateSubnetCidrBlock
       MapPublicIpOnLaunch: false
       Tags:
         - Key: Name
@@ -160,7 +172,7 @@ Resources:
     DependsOn: [NatGateway, InternetGateway]
     Properties: 
       InstanceType: t2.micro
-      ImageId: ami-0cff7528ff583bf9a
+      ImageId: !Ref Ec2InstaceAmi
       SubnetId: !Ref PrivateSubnet
       SecurityGroupIds:
         - !Ref VpcSecurityGroup
