@@ -1,4 +1,4 @@
-# api-gateway-certificate-propagation
+# Propagating valid mTLS client certificate identity to downstream services using Amazon API Gateway
 
 This project contains source code and supporting files for a demo application showcasing usage of Amazon API Gateway and AWS Lambda to implement mTLS, extraction of certificate properties, and propagation of those properties to downstream applications. 
 
@@ -24,7 +24,7 @@ subject, and uses it with custom business logic.
 
 To simulate a VPC environment two subnets will be created - a private and a public one. The backend application running on an EC2 instance will be hosted in a private subnet, so it cannot be reached directly from the public network such as the internet. A public subnet will be created to host the NAT Gateway, so the backend application running in the private subnet can reach out to internet to download updates. 
 
-## Key areas in sample code
+## Key areas in the sample code
 
 There are two key areas in the sample code that you should pay attention to. 
 
@@ -64,7 +64,7 @@ In addition, you can also change below parameter values in the `template.yaml` f
 ## How to run
 
 > ![](https://img.shields.io/badge/_-IMPORTANT-red) <br/> 
-> Some of the resources created as part of this sample architecture will have associated costs both when in use and running idle. This includes resources like NAT Gateway, Network Load Balancer, EC2 instance. Once you're done exploring the solution it is recommended to delete the deployed Stack to avoid unexpected costs. See the [Cleaning Up](#cleaning-up) section below for details. 
+> Some of the resources created as part of this sample architecture deployment will have associated costs both when in use and running idle. This includes resources like NAT Gateway, Network Load Balancer, EC2 instance. Once you're done exploring the solution it is recommended to delete the deployed Stack to avoid unexpected costs. See the [Cleaning Up](#cleaning-up) section below for details. 
 
 1.	Clone the repository. Change directory to `api-gateway-certificate-propagation`
 
