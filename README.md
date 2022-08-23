@@ -39,6 +39,7 @@ There are two key areas in the sample code that you should pay attention to.
 ## Prerequisites
 
 * This prototype uses `us-east-1` region. But, for any reasons, if you still want to use a different region, change the AMI ID in `template.yaml` file to the appropriate value of the valid AMI in that region as shown below.
+
     ![](AMI-ID.png)
 * An AWS account. To sign up follow instructions at [Sign Up For AWS](https://aws.amazon.com/resources/create-account/).
 * [AWS CLI](https://docs.aws.amazon.com/cli/latest/userguide/getting-started-install.html) and [AWS SAM CLI installed](https://docs.aws.amazon.com/serverless-application-model/latest/developerguide/serverless-sam-cli-install.html)
